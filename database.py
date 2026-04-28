@@ -6,15 +6,18 @@ DB_NAME = "fitness_bot.db"
 
 async def init_db():
     async with aiosqlite.connect(DB_NAME) as db:
-        # Таблиця користувача (для тебе)
+        # Таблиця користувача
         await db.execute('''
             CREATE TABLE IF NOT EXISTS user_profile (
                 id INTEGER PRIMARY KEY,
+                chat_id INTEGER UNIQUE,
                 weight REAL,
                 height REAL,
                 last_photo_date TEXT,
+                last_greeting_date TEXT,
                 streak INTEGER DEFAULT 0,
-                last_workout_date TEXT
+                last_workout_date TEXT,
+                mode TEXT DEFAULT 'cut'
             )
         ''')
         
@@ -22,19 +25,47 @@ async def init_db():
         await db.execute('''
             CREATE TABLE IF NOT EXISTS activity_logs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                type TEXT, -- 'food', 'body', 'leg_day'
+                type TEXT,
                 timestamp TEXT,
-                description TEXT
+                description TEXT,
+                result TEXT
             )
         ''')
 
-        # Додаємо поле для збереження тексту аналізу (щоб можна було переглядати історію)
+        # Таблиця повної історії діалогів
+        await db.execute('''
+            CREATE TABLE IF NOT EXISTS chat_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT,
+                user_message TEXT,
+                bot_response TEXT,
+                analysis_type TEXT,
+                context TEXT
+            )
+        ''')
+        
+        # Перевірка та додавання нових колонок
+        async with db.execute("PRAGMA table_info(user_profile)") as cursor:
+            columns = [row[1] for row in await cursor.fetchall()]
+        if "chat_id" not in columns:
+            await db.execute("ALTER TABLE user_profile ADD COLUMN chat_id INTEGER")
+            
         async with db.execute("PRAGMA table_info(activity_logs)") as cursor:
             columns = [row[1] for row in await cursor.fetchall()]
         if "result" not in columns:
             await db.execute("ALTER TABLE activity_logs ADD COLUMN result TEXT")
         
-        # Ініціалізація початкових даних, якщо порожньо
+        async with db.execute("PRAGMA table_info(user_profile)") as cursor:
+            columns = [row[1] for row in await cursor.fetchall()]
+        if "last_greeting_date" not in columns:
+            await db.execute("ALTER TABLE user_profile ADD COLUMN last_greeting_date TEXT")
+        
+        async with db.execute("PRAGMA table_info(user_profile)") as cursor:
+            columns = [row[1] for row in await cursor.fetchall()]
+        if "mode" not in columns:
+            await db.execute("ALTER TABLE user_profile ADD COLUMN mode TEXT DEFAULT 'cut'")
+        
+        # Ініціалізація початкових даних
         async with db.execute("SELECT COUNT(*) FROM user_profile") as cursor:
             count = await cursor.fetchone()
             if count[0] == 0:
@@ -92,3 +123,75 @@ async def set_user_height(height: float):
     async with aiosqlite.connect(DB_NAME) as db:
         await db.execute("UPDATE user_profile SET height = ? WHERE id = 1", (height,))
         await db.commit()
+
+
+async def save_chat_history(user_message: str, bot_response: str, analysis_type: str = "chat", context: str = ""):
+    """Зберігає весь чат + відповіді до БД"""
+    async with aiosqlite.connect(DB_NAME) as db:
+        now = datetime.now().isoformat()
+        await db.execute(
+            "INSERT INTO chat_history (timestamp, user_message, bot_response, analysis_type, context) VALUES (?, ?, ?, ?, ?)",
+            (now, user_message, bot_response, analysis_type, context),
+        )
+        await db.commit()
+
+
+async def get_chat_history(limit: int = 20, analysis_type: str | None = None):
+    """Витягує історію діалогів для контексту"""
+    async with aiosqlite.connect(DB_NAME) as db:
+        if analysis_type:
+            query = "SELECT user_message, bot_response, timestamp FROM chat_history WHERE analysis_type = ? ORDER BY timestamp DESC LIMIT ?"
+            params = (analysis_type, limit)
+        else:
+            query = "SELECT user_message, bot_response, timestamp FROM chat_history ORDER BY timestamp DESC LIMIT ?"
+            params = (limit,)
+
+        async with db.execute(query, params) as cursor:
+            rows = await cursor.fetchall()
+            return list(reversed(rows))  # Повернути у хронологічному порядку
+
+
+async def get_last_greeting_date():
+    """Перевіряє коли був останній привіт"""
+    async with aiosqlite.connect(DB_NAME) as db:
+        async with db.execute("SELECT last_greeting_date FROM user_profile WHERE id = 1") as cursor:
+            result = await cursor.fetchone()
+            return result[0] if result else None
+
+
+async def set_last_greeting_date(date_str: str):
+    """Оновлює дату останнього привіту"""
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute("UPDATE user_profile SET last_greeting_date = ? WHERE id = 1", (date_str,))
+        await db.commit()
+
+
+async def get_user_mode():
+    """Отримує поточний режим користувача (bulk/cut)"""
+    async with aiosqlite.connect(DB_NAME) as db:
+        async with db.execute("SELECT mode FROM user_profile WHERE id = 1") as cursor:
+            result = await cursor.fetchone()
+            return result[0] if result else "cut"
+
+
+async def set_user_mode(mode: str):
+    """Встановлює режим користувача (bulk/cut)"""
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute("UPDATE user_profile SET mode = ? WHERE id = 1", (mode,))
+        await db.commit()
+        await db.commit()
+
+
+async def save_chat_id(chat_id: int):
+    """Зберігає chat_id користувача для розсилки"""
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute("UPDATE user_profile SET chat_id = ? WHERE id = 1", (chat_id,))
+        await db.commit()
+
+
+async def get_all_chat_ids():
+    """Отримує всі chat_ids для розсилки (наприклад, для щоденного привіту)"""
+    async with aiosqlite.connect(DB_NAME) as db:
+        async with db.execute("SELECT chat_id FROM user_profile WHERE chat_id IS NOT NULL") as cursor:
+            rows = await cursor.fetchall()
+            return [row[0] for row in rows]
