@@ -3,6 +3,8 @@
 import google.ai.generativelanguage as gal
 from google.api_core.client_options import ClientOptions
 from datetime import date
+import asyncio
+import time
 
 from config import (
     GEMINI_API_KEY,
@@ -110,3 +112,48 @@ async def chat(message_text: str, history: list[str] | None = None) -> str:
         return "\n".join(text_parts).strip() or "Gemini повернув пусту відповідь."
     except Exception as e:
         return f"Помилка при зверненні до Gemini: {e}"
+
+
+async def show_progress(msg, estimated_seconds: int = 10):
+    """Показує прогресбар у відсотках під час аналізу"""
+    start = time.monotonic()
+    try:
+        while True:
+            elapsed = time.monotonic() - start
+            percent = min(99, int((elapsed / estimated_seconds) * 100))
+            bar_fill = int(percent / 5)
+            bar = "█" * bar_fill + "░" * (20 - bar_fill)
+            remaining = max(0, int(estimated_seconds - elapsed))
+            
+            text = (
+                f"🔎 Аналізую...\n\n"
+                f"[{bar}] {percent}%\n"
+                f"⏳ ~{remaining}s"
+            )
+            try:
+                await msg.edit_text(text)
+            except:
+                pass
+            await asyncio.sleep(0.5)
+    except asyncio.CancelledError:
+        return
+
+
+async def analyze_image_with_progress(image_bytes: list[bytes], analysis_type: str, msg, context_text: str | None = None) -> str:
+    """Аналізує фото з показом прогресбара"""
+    estimated_secs = max(5, len(image_bytes) * 4)
+    progress_task = asyncio.create_task(show_progress(msg, estimated_secs))
+    
+    try:
+        result = await analyze_image(image_bytes, analysis_type, context_text)
+        await msg.edit_text(f"✅ Аналіз:\n\n{result}")
+        return result
+    except Exception as e:
+        await msg.edit_text(f"❌ Помилка: {e}")
+        raise
+    finally:
+        progress_task.cancel()
+        try:
+            await progress_task
+        except:
+            pass
