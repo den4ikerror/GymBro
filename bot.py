@@ -5,7 +5,7 @@ from aiogram import Bot, Dispatcher
 from config import TELEGRAM_TOKEN
 from database import init_db
 from handlers import common, nutrition, fitness
-from utils.scheduler import schedule_weekly_analysis
+from utils.scheduler import schedule_weekly_analysis, scheduled_daily_greeting
 
 logging.basicConfig(level=logging.DEBUG)
 
@@ -28,8 +28,8 @@ async def main():
     dp.include_router(nutrition.router)
     dp.include_router(fitness.router)
     
-    # Запускаємо щотижневий підсумок для користувача (chat_id=1, але в коді використовується message.chat.id)
-    # Для спрощення, припустимо chat_id відомий, але оскільки бот для одного, додам placeholder
+    # Запускаємо планувальники в фоні
+    asyncio.create_task(scheduled_daily_greeting())
     # asyncio.create_task(schedule_weekly_analysis(123456789))  # Замінити на реальний chat_id
     
     await bot.delete_webhook(drop_pending_updates=True)
